@@ -1,0 +1,6 @@
+python-telegram-bot==21.9
+supabase==2.15.2
+gdown==5.2.0
+python-dotenv==1.1.0
+aiohttp==3.11.18
+Pillow==11.2.1

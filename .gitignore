@@ -1,0 +1,25 @@
+# Environment variables (JANGAN diupload ke GitHub!)
+.env
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# Logs
+*.log
+
+# Temp files
+*.tmp
+tmp/
+
+# OS files
+.DS_Store
+Thumbs.db
