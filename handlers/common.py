@@ -24,14 +24,21 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler /start - daftarkan user & tampilkan menu."""
     user = update.effective_user
 
-    # Simpan user ke database
-    upsert_user(
-        user_id=user.id,
-        username=user.username,
-        full_name=user.full_name or user.first_name or "Unknown",
-    )
+    # Simpan user ke database (tidak crash jika Supabase error)
+    try:
+        upsert_user(
+            user_id=user.id,
+            username=user.username,
+            full_name=user.full_name or user.first_name or "Unknown",
+        )
+    except Exception as e:
+        print(f"[DB] Error upsert_user: {e}")
 
-    role_text = "👑 Admin" if is_admin(user.id) else "👤 User"
+    try:
+        admin = is_admin(user.id)
+    except Exception:
+        admin = False
+    role_text = "👑 Admin" if admin else "👤 User"
 
     welcome_text = (
         f"👋 Halo, *{user.first_name}*!\n\n"
@@ -43,7 +50,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "ℹ️ /help — Bantuan\n"
     )
 
-    if is_admin(user.id):
+    if admin:
         welcome_text += (
             "\n*🔧 Menu Admin:*\n"
             "➕ /tambah — Tambah foto baru\n"
