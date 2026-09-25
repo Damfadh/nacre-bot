@@ -39,6 +39,9 @@ def get_text_model():
     """Singleton Gemini text model."""
     global _text_model
     if _text_model is None:
+        key = os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
+        if key:
+            genai.configure(api_key=key)
         _text_model = genai.GenerativeModel(
             model_name="gemini-3.8-flash",
             system_instruction=SYSTEM_PROMPT,
@@ -50,6 +53,9 @@ def get_vision_model():
     """Singleton Gemini vision model (untuk analisis gambar)."""
     global _vision_model
     if _vision_model is None:
+        key = os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
+        if key:
+            genai.configure(api_key=key)
         _vision_model = genai.GenerativeModel("gemini-3.8-flash")
     return _vision_model
 
