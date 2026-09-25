@@ -34,6 +34,7 @@ from handlers.archive_handler import (
     cmd_status_arsip,
     handle_auto_archive,
 )
+from handlers.audit_handler import cmd_audit_channel, scheduled_audit
 
 # Setup logging
 logging.basicConfig(
@@ -56,6 +57,7 @@ async def post_init(application: Application) -> None:
         BotCommand("arsip", "Arsipkan dokumentasi (kirim link GDrive)"),
         BotCommand("cari_arsip", "Cari arsip dokumentasi"),
         BotCommand("status_arsip", "Cek status sistem arsip"),
+        BotCommand("audit_channel", "Admin: Audit & sortir semua link channel"),
         BotCommand("myid", "Lihat Telegram ID kamu"),
         BotCommand("tambah", "Admin: Tambah foto baru"),
         BotCommand("hapus", "Admin: Hapus foto"),
@@ -114,6 +116,7 @@ def main() -> None:
     app.add_handler(CommandHandler("arsip", cmd_arsip))
     app.add_handler(CommandHandler("cari_arsip", cmd_cari_arsip))
     app.add_handler(CommandHandler("status_arsip", cmd_status_arsip))
+    app.add_handler(CommandHandler("audit_channel", cmd_audit_channel))
 
     # Auto-archive: deteksi GDrive link di grup (prioritas tinggi, sebelum AI handler)
     app.add_handler(
@@ -135,6 +138,18 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(handle_admin_callback, pattern=r"^admin_"))
     # User callbacks
     app.add_handler(CallbackQueryHandler(handle_callback))
+
+    # ─── Scheduled Jobs ───
+    # Audit otomatis setiap Minggu pukul 20:00
+    job_queue = app.job_queue
+    if job_queue:
+        job_queue.run_daily(
+            scheduled_audit,
+            time=__import__("datetime").time(hour=20, minute=0),
+            days=(6,),  # 6 = Minggu
+            name="weekly_audit",
+        )
+        logger.info("✅ Scheduled audit mingguan (Minggu 20:00) telah diset")
 
     logger.info("✅ Semua handler terdaftar. Bot siap menerima pesan!")
 
