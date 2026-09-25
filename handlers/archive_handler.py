@@ -200,7 +200,8 @@ async def cmd_status_arsip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sheets_id_ok = bool(sheets_id)
 
     status = (
-        "📊 *Status Sistem Arsip Dokumentasi*\n\n"
+        "📊 *Status Sistem Arsip Dokumentasi*\n"
+        "⚡ Model AI: `gemini-3.8-flash`\n\n"
         f"{'✅' if gemini_ok else '❌'} Gemini AI API Key\n"
         f"{'✅' if sheets_id_ok else '❌'} Google Sheets ID\n"
         f"{'✅' if sheets_ok else '❌'} Service Account Credentials\n\n"

@@ -74,7 +74,7 @@ def main() -> None:
     # Validasi konfigurasi sebelum start
     validate_config()
 
-    logger.info("🚀 Nacre Bot mulai...")
+    logger.info("🚀 Nacre Bot mulai... [VERSION 2.1 - GEMINI 3.8 FLASH ACTIVE]")
 
     # Buat aplikasi bot dengan timeout lebih besar
     request = HTTPXRequest(
