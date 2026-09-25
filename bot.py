@@ -7,6 +7,8 @@ from telegram.ext import (
     Application,
     CommandHandler,
     CallbackQueryHandler,
+    MessageHandler,
+    filters,
 )
 from telegram.request import HTTPXRequest
 
@@ -25,6 +27,7 @@ from handlers import (
     handle_callback,
     handle_admin_callback,
 )
+from handlers.ai_handler import cmd_ai, cmd_cari_ai, cmd_reset_ai, handle_ai_message
 
 # Setup logging
 logging.basicConfig(
@@ -39,8 +42,12 @@ async def post_init(application: Application) -> None:
     await application.bot.set_my_commands([
         BotCommand("start", "Menu utama"),
         BotCommand("cari", "Cari foto berdasarkan kata kunci"),
+        BotCommand("cari_ai", "Smart search foto dengan AI"),
+        BotCommand("ai", "Chat dengan Nacre AI"),
+        BotCommand("reset_ai", "Reset riwayat chat AI"),
         BotCommand("kategori", "Lihat semua kategori foto"),
         BotCommand("help", "Bantuan penggunaan bot"),
+        BotCommand("myid", "Lihat Telegram ID kamu"),
         BotCommand("tambah", "Admin: Tambah foto baru"),
         BotCommand("hapus", "Admin: Hapus foto"),
         BotCommand("setadmin", "Admin: Jadikan user sebagai admin"),
@@ -88,6 +95,13 @@ def main() -> None:
     app.add_handler(CommandHandler("setadmin", cmd_setadmin))
     app.add_handler(CommandHandler("ban", cmd_ban))
     app.add_handler(CommandHandler("unban", cmd_unban))
+
+    # ─── AI Handlers ───
+    app.add_handler(CommandHandler("ai", cmd_ai))
+    app.add_handler(CommandHandler("cari_ai", cmd_cari_ai))
+    app.add_handler(CommandHandler("reset_ai", cmd_reset_ai))
+    # Auto-reply AI untuk private chat
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ai_message))
 
     # ─── Callback Handlers ───
     # Admin callbacks (prioritas lebih tinggi)

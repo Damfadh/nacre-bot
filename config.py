@@ -9,6 +9,9 @@ load_dotenv()
 # Token Bot Telegram
 BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
+# Gemini AI
+GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+
 # Supabase
 SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "")

@@ -143,7 +143,11 @@ async def tambah_sumber_gdrive(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def tambah_sumber_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Terima foto yang dikirim sebagai Document."""
+    """Terima foto yang dikirim sebagai Document + AI moderasi & auto caption."""
+    from utils.ai import moderate_image, generate_photo_caption
+    from utils.gdrive import cleanup_file
+    import tempfile
+
     doc = update.message.document
     if not doc or not doc.mime_type.startswith("image/"):
         await update.message.reply_text(
@@ -152,29 +156,77 @@ async def tambah_sumber_document(update: Update, context: ContextTypes.DEFAULT_T
         )
         return STATE_SUMBER
 
-    # Simpan dengan telegram_file_id
     user = update.effective_user
-    telegram_file_id = doc.file_id
+    msg = await update.message.reply_text("⏳ Menganalisis foto dengan AI...")
 
+    # Download foto sementara untuk dianalisis AI
+    tmp_path = None
+    try:
+        file = await context.bot.get_file(doc.file_id)
+        tmp_path = os.path.join(tempfile.gettempdir(), f"nacre_{doc.file_id}.jpg")
+        await file.download_to_drive(tmp_path)
+
+        # 1. MODERASI — cek apakah foto aman
+        await msg.edit_text("🛡️ AI sedang memeriksa konten foto...")
+        moderation = await moderate_image(tmp_path)
+
+        if not moderation.get("safe", True):
+            await msg.edit_text(
+                f"🚫 *Foto ditolak oleh AI Moderasi*\n\n"
+                f"Alasan: {moderation.get('reason', 'Konten tidak pantas')}\n\n"
+                "Silakan kirim foto lain:",
+                parse_mode="Markdown",
+            )
+            cleanup_file(tmp_path)
+            return STATE_SUMBER
+
+        # 2. AUTO CAPTION — generate judul & deskripsi jika belum diisi
+        judul = context.user_data.get("judul")
+        deskripsi = context.user_data.get("deskripsi")
+        kategori = context.user_data.get("kategori", "umum")
+
+        if judul == "AUTO" or deskripsi is None:
+            await msg.edit_text("✨ AI sedang membuat deskripsi foto...")
+            caption_data = await generate_photo_caption(tmp_path)
+
+            if judul == "AUTO":
+                judul = caption_data.get("judul", "Foto Baru")
+            if deskripsi is None:
+                deskripsi = caption_data.get("deskripsi")
+            if kategori == "umum":
+                kategori = caption_data.get("kategori", "umum")
+
+    except Exception as e:
+        print(f"[Admin] AI error: {e}")
+        judul = context.user_data.get("judul", "Foto Baru")
+        deskripsi = context.user_data.get("deskripsi")
+        kategori = context.user_data.get("kategori", "umum")
+    finally:
+        if tmp_path:
+            cleanup_file(tmp_path)
+
+    # Simpan ke database
     result = add_photo(
-        title=context.user_data["judul"],
-        telegram_file_id=telegram_file_id,
-        description=context.user_data.get("deskripsi"),
-        category=context.user_data["kategori"],
+        title=judul,
+        telegram_file_id=doc.file_id,
+        description=deskripsi,
+        category=kategori,
         uploaded_by=user.id,
     )
 
     if result:
-        await update.message.reply_text(
+        await msg.edit_text(
             f"✅ *Foto berhasil ditambahkan!*\n\n"
             f"🔖 ID: #{result['id']}\n"
             f"📌 Judul: {result['title']}\n"
             f"📂 Kategori: {result['category']}\n"
-            f"💾 Sumber: Telegram Document",
+            f"📝 Deskripsi: {result.get('description') or '-'}\n"
+            f"💾 Sumber: Telegram Document\n"
+            f"🤖 _AI: moderasi ✅ | caption ✅_",
             parse_mode="Markdown",
         )
     else:
-        await update.message.reply_text("❌ Gagal menyimpan foto ke database.")
+        await msg.edit_text("❌ Gagal menyimpan foto ke database.")
 
     context.user_data.clear()
     return ConversationHandler.END
