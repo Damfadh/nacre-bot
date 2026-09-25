@@ -49,30 +49,60 @@ async def chat_with_ai(user_id: int, message: str) -> str:
     """
     Chat dengan Gemini 3.8 Flash menggunakan Interactions API.
     Mendukung percakapan multi-turn otomatis melalui previous_interaction_id.
+    Dilengkapi auto-retry untuk mengatasi lonjakan antrean (503 transient error).
     """
     loop = asyncio.get_event_loop()
     try:
         client = get_client()
-        prev_id = _user_interaction_ids.get(user_id)
-
-        def _call_api():
-            kwargs = {
-                "model": "gemini-3.8-flash",
-                "system_instruction": SYSTEM_PROMPT,
-                "input": message,
-            }
-            if prev_id:
-                kwargs["previous_interaction_id"] = prev_id
-            return client.interactions.create(**kwargs)
-
-        res = await loop.run_in_executor(None, _call_api)
-        if res and hasattr(res, "id"):
-            _user_interaction_ids[user_id] = res.id
-        return res.output_text if hasattr(res, "output_text") else str(res)
-
     except Exception as e:
-        print(f"[AI Chat] Error: {e}")
-        return f"❌ AI error: {str(e)[:250]}"
+        return f"❌ Konfigurasi AI belum siap: {e}"
+
+    prev_id = _user_interaction_ids.get(user_id)
+
+    for attempt in range(3):
+        try:
+            def _call_api():
+                kwargs = {
+                    "model": "gemini-3.8-flash",
+                    "system_instruction": SYSTEM_PROMPT,
+                    "input": message,
+                }
+                if prev_id:
+                    kwargs["previous_interaction_id"] = prev_id
+                return client.interactions.create(**kwargs)
+
+            res = await loop.run_in_executor(None, _call_api)
+            if res and hasattr(res, "id"):
+                _user_interaction_ids[user_id] = res.id
+            if hasattr(res, "output_text") and res.output_text:
+                return res.output_text
+            return str(res)
+
+        except Exception as e:
+            err_msg = str(e)
+            print(f"[AI Chat] Attempt {attempt+1} error: {err_msg}")
+
+            # Jika previous_interaction_id invalid/expired, reset session dan coba ulang
+            if prev_id and ("not found" in err_msg.lower() or "invalid" in err_msg.lower() or "404" in err_msg):
+                prev_id = None
+                _user_interaction_ids.pop(user_id, None)
+                continue
+
+            # Jika 503 / temporary unavailable, coba ulang hingga 3x
+            if "503" in err_msg or "UNAVAILABLE" in err_msg or "high demand" in err_msg.lower():
+                if attempt < 2:
+                    await asyncio.sleep(2)
+                    continue
+                return "⚠️ Server AI Google sedang mengalami lonjakan antrean (503). Silakan coba lagi dalam beberapa detik ya!"
+
+            # Jika 429 quota
+            if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
+                return "⚠️ Kuota penggunaan AI gratis sedang penuh. Silakan coba beberapa saat lagi."
+
+            return f"❌ Terjadi kendala pada layanan AI: {err_msg[:120]}"
+
+    return "⚠️ Server AI sedang sibuk. Silakan coba lagi."
+
 
 
 # ─────────────────────────────────────────────

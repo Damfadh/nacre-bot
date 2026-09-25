@@ -8,6 +8,14 @@ from utils.ai import chat_with_ai, ai_smart_search, clear_chat_session
 from handlers.permissions import require_not_banned
 
 
+async def _safe_reply(message_obj, text: str):
+    """Kirim balasan dengan Markdown, otomatis fallback jika format markdown error."""
+    try:
+        await message_obj.reply_text(text, parse_mode="Markdown")
+    except Exception:
+        await message_obj.reply_text(text)
+
+
 @require_not_banned
 async def cmd_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler /ai [pesan] — chat dengan Gemini AI."""
@@ -38,9 +46,9 @@ async def cmd_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Kirim ke Gemini
     response = await chat_with_ai(user_id=user.id, message=message)
 
-    await update.message.reply_text(
+    await _safe_reply(
+        update.message,
         f"🤖 *Nacre AI:*\n\n{response}",
-        parse_mode="Markdown",
     )
 
 
@@ -142,7 +150,5 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     response = await chat_with_ai(user_id=user.id, message=clean_text)
-    await update.message.reply_text(
-        f"🤖 {response}",
-        parse_mode="Markdown",
-    )
+    await _safe_reply(update.message, f"🤖 {response}")
+
