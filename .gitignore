@@ -1,5 +1,9 @@
-# Environment variables (JANGAN diupload ke GitHub!)
+# Environment variables & secrets (JANGAN diupload ke GitHub!)
 .env
+credentials.json
+credentials_base64.txt
+*.json
+
 
 # Python cache
 __pycache__/
