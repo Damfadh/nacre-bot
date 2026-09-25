@@ -24,6 +24,10 @@ ADMIN_IDS: list[int] = [
     if uid.strip().isdigit()
 ]
 
+# Google Sheets (untuk sistem arsip dokumentasi)
+SHEETS_ID: str = os.getenv("SHEETS_ID", "")
+SHEETS_CREDENTIALS_FILE: str = os.getenv("SHEETS_CREDENTIALS_FILE", "credentials.json")
+
 # Validasi konfigurasi wajib
 def validate_config() -> None:
     missing = []

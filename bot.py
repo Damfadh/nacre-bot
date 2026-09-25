@@ -28,6 +28,12 @@ from handlers import (
     handle_admin_callback,
 )
 from handlers.ai_handler import cmd_ai, cmd_cari_ai, cmd_reset_ai, handle_ai_message
+from handlers.archive_handler import (
+    cmd_arsip,
+    cmd_cari_arsip,
+    cmd_status_arsip,
+    handle_auto_archive,
+)
 
 # Setup logging
 logging.basicConfig(
@@ -47,6 +53,9 @@ async def post_init(application: Application) -> None:
         BotCommand("reset_ai", "Reset riwayat chat AI"),
         BotCommand("kategori", "Lihat semua kategori foto"),
         BotCommand("help", "Bantuan penggunaan bot"),
+        BotCommand("arsip", "Arsipkan dokumentasi (kirim link GDrive)"),
+        BotCommand("cari_arsip", "Cari arsip dokumentasi"),
+        BotCommand("status_arsip", "Cek status sistem arsip"),
         BotCommand("myid", "Lihat Telegram ID kamu"),
         BotCommand("tambah", "Admin: Tambah foto baru"),
         BotCommand("hapus", "Admin: Hapus foto"),
@@ -100,8 +109,26 @@ def main() -> None:
     app.add_handler(CommandHandler("ai", cmd_ai))
     app.add_handler(CommandHandler("cari_ai", cmd_cari_ai))
     app.add_handler(CommandHandler("reset_ai", cmd_reset_ai))
+
+    # ─── Archive / Dokumentasi Handlers ───
+    app.add_handler(CommandHandler("arsip", cmd_arsip))
+    app.add_handler(CommandHandler("cari_arsip", cmd_cari_arsip))
+    app.add_handler(CommandHandler("status_arsip", cmd_status_arsip))
+
+    # Auto-archive: deteksi GDrive link di grup (prioritas tinggi, sebelum AI handler)
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS,
+            handle_auto_archive,
+        ),
+        group=1,
+    )
+
     # Auto-reply AI untuk private chat
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ai_message))
+    app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ai_message),
+        group=2,
+    )
 
     # ─── Callback Handlers ───
     # Admin callbacks (prioritas lebih tinggi)
