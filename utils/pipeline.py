@@ -7,23 +7,17 @@ Node 3: AI Formatter     → Format data Sheets + buat pesan balasan Telegram
 """
 import json
 import asyncio
+import os
 from datetime import datetime
-import google.generativeai as genai
+from google import genai
 from config import GEMINI_API_KEY
 
-genai.configure(api_key=GEMINI_API_KEY)
 
-
-def _make_model(temperature: float):
-    """Buat Gemini model dengan temperature tertentu."""
-    import os
+def _get_client() -> genai.Client:
     key = os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
-    if key:
-        genai.configure(api_key=key)
-    return genai.GenerativeModel(
-        model_name="gemini-3.8-flash",
-        generation_config=genai.GenerationConfig(temperature=temperature),
-    )
+    if not key:
+        raise ValueError("GEMINI_API_KEY belum diset!")
+    return genai.Client(api_key=key)
 
 
 def _parse_json(text: str) -> dict:
@@ -33,13 +27,19 @@ def _parse_json(text: str) -> dict:
     return json.loads(text)
 
 
-async def _generate(model, prompt: str) -> str:
-    """Jalankan Gemini secara async di thread pool."""
+async def _generate(prompt: str) -> str:
+    """Jalankan Gemini Interactions API secara async di thread pool."""
     loop = asyncio.get_event_loop()
-    response = await loop.run_in_executor(
-        None, lambda: model.generate_content(prompt)
+    client = _get_client()
+    res = await loop.run_in_executor(
+        None,
+        lambda: client.interactions.create(
+            model="gemini-3.8-flash",
+            input=prompt,
+        ),
     )
-    return response.text
+    return res.output_text if hasattr(res, "output_text") else str(res)
+
 
 
 # ─────────────────────────────────────────────
@@ -55,8 +55,6 @@ async def node1_extractor(
     Node 1: Ekstrak komponen kunci dari teks mentah Telegram.
     Temperature: 0.0 (sangat presisi, tidak imajinatif)
     """
-    model = _make_model(temperature=0.0)
-
     prompt = f"""Anda adalah AI Data Extractor khusus untuk pengarsipan dokumentasi PDD dan Humas.
 Tugas utama Anda adalah menganalisis teks masukan mentah dari Telegram, lalu mengekstrak komponen kunci tanpa mengubah fakta asli.
 
@@ -91,7 +89,7 @@ Keluarkan HANYA JSON murni tanpa format markdown codeblock.
 }}"""
 
     try:
-        result = await _generate(model, prompt)
+        result = await _generate(prompt)
         data = _parse_json(result)
         data["sender"] = sender_name  # pastikan sender benar
         return data
@@ -113,10 +111,7 @@ Keluarkan HANYA JSON murni tanpa format markdown codeblock.
 async def node2_classifier(node1_output: dict) -> dict:
     """
     Node 2: Klasifikasi, pelabelan, dan standarisasi nama.
-    Temperature: 0.2
     """
-    model = _make_model(temperature=0.2)
-
     prompt = f"""Anda adalah AI Taksonomi & Chief Editor PDD/Humas.
 Tugas Anda adalah memproses data JSON dari Node 1, mengklasifikasikannya ke dalam taksonomi resmi organisasi, serta menyusun format penamaan folder yang terstandar.
 
@@ -150,7 +145,7 @@ Keluarkan HANYA JSON murni tanpa format markdown codeblock.
 }}"""
 
     try:
-        result = await _generate(model, prompt)
+        result = await _generate(prompt)
         return _parse_json(result)
     except Exception as e:
         print(f"[Node 2] Error: {e}")
@@ -173,10 +168,7 @@ Keluarkan HANYA JSON murni tanpa format markdown codeblock.
 async def node3_formatter(node2_output: dict, archive_id: str) -> dict:
     """
     Node 3: Format data siap simpan ke Sheets + buat pesan balasan Telegram.
-    Temperature: 0.3
     """
-    model = _make_model(temperature=0.3)
-
     prompt = f"""Anda adalah AI Output Formatter dan Telegram Bot Responder.
 Tugas Anda adalah merubah JSON dari Node 2 menjadi dua objek utama:
 1. Objek data baris untuk Google Sheets.
@@ -209,7 +201,7 @@ Keluarkan HANYA JSON murni tanpa format markdown codeblock.
 }}"""
 
     try:
-        result = await _generate(model, prompt)
+        result = await _generate(prompt)
         return _parse_json(result)
     except Exception as e:
         print(f"[Node 3] Error: {e}")

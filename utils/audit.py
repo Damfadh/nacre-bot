@@ -12,10 +12,17 @@ from datetime import datetime
 from typing import Optional
 
 import aiohttp
-import google.generativeai as genai
+import os
+from google import genai
 from config import GEMINI_API_KEY
 
-genai.configure(api_key=GEMINI_API_KEY)
+
+def _get_client() -> genai.Client:
+    key = os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
+    if not key:
+        raise ValueError("GEMINI_API_KEY belum diset!")
+    return genai.Client(api_key=key)
+
 
 # Regex untuk ekstrak Google Drive URL
 GDRIVE_REGEX = re.compile(r"https?://drive\.google\.com/\S+")
@@ -154,7 +161,7 @@ async def node2_link_validator(unique_items: list[dict]) -> tuple[list[dict], li
 # NODE 3: AI CATEGORIZER & SORTING ENGINE
 # ─────────────────────────────────────────────
 
-async def _categorize_batch(model, batch: list[dict], total_stats: dict) -> dict:
+async def _categorize_batch(client: genai.Client, batch: list[dict], total_stats: dict) -> dict:
     """Kategorikan satu batch item dengan Gemini."""
     loop = asyncio.get_event_loop()
 
@@ -200,11 +207,15 @@ Keluarkan HANYA JSON murni tanpa format markdown codeblock.
   "telegram_report_message": "pesan laporan lengkap dengan emoji dan format Markdown"
 }}"""
 
-    response = await loop.run_in_executor(
+    res = await loop.run_in_executor(
         None,
-        lambda: model.generate_content(prompt)
+        lambda: client.interactions.create(
+            model="gemini-3.8-flash",
+            input=prompt,
+        )
     )
-    text = response.text.strip().replace("```json", "").replace("```", "").strip()
+    raw = res.output_text if hasattr(res, "output_text") else str(res)
+    text = raw.strip().replace("```json", "").replace("```", "").strip()
     return json.loads(text)
 
 
@@ -217,15 +228,7 @@ async def node3_ai_categorizer(
     Node 3: AI kategorisasi dan buat laporan ringkasan.
     Proses batch jika >50 item.
     """
-    import os
-    key = os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
-    if key:
-        genai.configure(api_key=key)
-
-    model = genai.GenerativeModel(
-        model_name="gemini-3.8-flash",
-        generation_config=genai.GenerationConfig(temperature=0.1),
-    )
+    client = _get_client()
 
     total_stats = {
         "total_processed": len(valid_items) + len(duplicate_items) + len(broken_items),
@@ -244,7 +247,7 @@ async def node3_ai_categorizer(
         all_categorized = []
 
         if len(valid_items) <= BATCH_SIZE:
-            result = await _categorize_batch(model, valid_items, total_stats)
+            result = await _categorize_batch(client, valid_items, total_stats)
             all_categorized = result.get("categorized_valid_data", [])
             telegram_msg = result.get("telegram_report_message", "")
         else:
@@ -252,7 +255,7 @@ async def node3_ai_categorizer(
             telegram_msg = ""
             for i in range(0, len(valid_items), BATCH_SIZE):
                 batch = valid_items[i:i + BATCH_SIZE]
-                batch_result = await _categorize_batch(model, batch, total_stats)
+                batch_result = await _categorize_batch(client, batch, total_stats)
                 batch_cats = batch_result.get("categorized_valid_data", [])
 
                 # Merge ke all_categorized
