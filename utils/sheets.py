@@ -1,8 +1,12 @@
 """
 Integrasi Google Sheets untuk penyimpanan arsip dokumentasi.
-Menggunakan Service Account JSON untuk autentikasi.
+Mendukung 2 metode autentikasi:
+1. File credentials.json langsung (lokal)
+2. Environment variable GOOGLE_CREDENTIALS_BASE64 (Railway/cloud)
 """
 import asyncio
+import base64
+import json
 import os
 from datetime import datetime
 from typing import Optional
@@ -29,6 +33,30 @@ HEADERS = [
     "Waktu_Input",
 ]
 
+
+def _get_credentials() -> Credentials:
+    """
+    Ambil Google credentials dengan fallback:
+    1. File credentials.json (untuk lokal / Railway dengan file mount)
+    2. Environment variable GOOGLE_CREDENTIALS_BASE64 (lebih mudah di Railway)
+    """
+    # Metode 1: File langsung
+    if SHEETS_CREDENTIALS_FILE and os.path.exists(SHEETS_CREDENTIALS_FILE):
+        return Credentials.from_service_account_file(
+            SHEETS_CREDENTIALS_FILE, scopes=SCOPES
+        )
+
+    # Metode 2: Base64 dari environment variable
+    b64 = os.getenv("GOOGLE_CREDENTIALS_BASE64", "")
+    if b64:
+        json_data = json.loads(base64.b64decode(b64).decode("utf-8"))
+        return Credentials.from_service_account_info(json_data, scopes=SCOPES)
+
+    raise ValueError(
+        "Google credentials tidak ditemukan! "
+        "Set GOOGLE_CREDENTIALS_BASE64 atau sediakan file credentials.json"
+    )
+
 _client: Optional[gspread.Client] = None
 _sheet: Optional[gspread.Worksheet] = None
 
@@ -40,10 +68,7 @@ def get_sheet() -> gspread.Worksheet:
     if _sheet is not None:
         return _sheet
 
-    # Autentikasi menggunakan service account JSON
-    creds = Credentials.from_service_account_file(
-        SHEETS_CREDENTIALS_FILE, scopes=SCOPES
-    )
+    creds = _get_credentials()
     _client = gspread.authorize(creds)
     spreadsheet = _client.open_by_key(SHEETS_ID)
 
@@ -120,12 +145,12 @@ async def search_archives(keyword: str) -> list[dict]:
 
 
 def is_sheets_configured() -> bool:
-    """Cek apakah Google Sheets sudah dikonfigurasi."""
-    return bool(
-        SHEETS_ID
-        and SHEETS_CREDENTIALS_FILE
-        and os.path.exists(SHEETS_CREDENTIALS_FILE)
+    """Cek apakah Google Sheets sudah dikonfigurasi (file JSON atau Base64)."""
+    has_credentials = (
+        bool(SHEETS_CREDENTIALS_FILE and os.path.exists(SHEETS_CREDENTIALS_FILE))
+        or bool(os.getenv("GOOGLE_CREDENTIALS_BASE64", ""))
     )
+    return bool(SHEETS_ID and has_credentials)
 
 
 # ─────────────────────────────────────────────
