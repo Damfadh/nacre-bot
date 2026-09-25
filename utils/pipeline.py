@@ -16,8 +16,12 @@ genai.configure(api_key=GEMINI_API_KEY)
 
 def _make_model(temperature: float):
     """Buat Gemini model dengan temperature tertentu."""
+    import os
+    key = os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
+    if key:
+        genai.configure(api_key=key)
     return genai.GenerativeModel(
-        model_name="gemini-2.0-flash",
+        model_name="gemini-3.8-flash",
         generation_config=genai.GenerationConfig(temperature=temperature),
     )
 

@@ -217,8 +217,13 @@ async def node3_ai_categorizer(
     Node 3: AI kategorisasi dan buat laporan ringkasan.
     Proses batch jika >50 item.
     """
+    import os
+    key = os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
+    if key:
+        genai.configure(api_key=key)
+
     model = genai.GenerativeModel(
-        model_name="gemini-2.0-flash",
+        model_name="gemini-3.8-flash",
         generation_config=genai.GenerationConfig(temperature=0.1),
     )
 

@@ -40,7 +40,7 @@ def get_text_model():
     global _text_model
     if _text_model is None:
         _text_model = genai.GenerativeModel(
-            model_name="gemini-2.0-flash",
+            model_name="gemini-3.8-flash",
             system_instruction=SYSTEM_PROMPT,
         )
     return _text_model
@@ -50,7 +50,7 @@ def get_vision_model():
     """Singleton Gemini vision model (untuk analisis gambar)."""
     global _vision_model
     if _vision_model is None:
-        _vision_model = genai.GenerativeModel("gemini-2.0-flash")
+        _vision_model = genai.GenerativeModel("gemini-3.8-flash")
     return _vision_model
 
 

@@ -189,11 +189,15 @@ async def cmd_cari_arsip(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_status_arsip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Command /status_arsip — cek konfigurasi sistem arsip."""
+    import os
     sheets_ok = is_sheets_configured()
     from config import GEMINI_API_KEY, SHEETS_ID
 
-    gemini_ok = bool(GEMINI_API_KEY)
-    sheets_id_ok = bool(SHEETS_ID)
+    gemini_key = os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
+    sheets_id = os.getenv("SHEETS_ID") or SHEETS_ID
+
+    gemini_ok = bool(gemini_key)
+    sheets_id_ok = bool(sheets_id)
 
     status = (
         "📊 *Status Sistem Arsip Dokumentasi*\n\n"
