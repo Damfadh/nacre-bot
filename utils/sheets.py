@@ -115,6 +115,42 @@ async def append_archive_row(database_row: dict) -> bool:
         return False
 
 
+async def append_archive_rows(database_rows: list[dict]) -> bool:
+    """
+    Tambahkan beberapa baris ke Google Sheets sekaligus (Batch Append).
+    Mencegah rate limiting API dan jauh lebih cepat untuk bulk links.
+    Returns True jika berhasil.
+    """
+    if not database_rows:
+        return True
+    loop = asyncio.get_event_loop()
+    try:
+        def _append_batch():
+            sheet = get_sheet()
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            rows = []
+            for item in database_rows:
+                rows.append([
+                    item.get("ID_Arsip", ""),
+                    item.get("Tanggal_Kegiatan", ""),
+                    item.get("Nama_Kegiatan", ""),
+                    item.get("Kategori", ""),
+                    item.get("Tags", ""),
+                    item.get("Link_Google_Drive", ""),
+                    item.get("Pengirim", ""),
+                    item.get("Format_Nama_Folder", ""),
+                    item.get("Waktu_Input") or now_str,
+                ])
+            sheet.append_rows(rows, value_input_option="USER_ENTERED")
+            return True
+
+        return await loop.run_in_executor(None, _append_batch)
+
+    except Exception as e:
+        print(f"[Sheets] Error batch append rows: {e}")
+        return False
+
+
 async def search_archives(keyword: str) -> list[dict]:
     """
     Cari arsip di Google Sheets berdasarkan keyword.
@@ -196,9 +232,7 @@ async def write_audit_results(audit_result: dict) -> bool:
     loop = asyncio.get_event_loop()
     try:
         def _write():
-            creds = Credentials.from_service_account_file(
-                SHEETS_CREDENTIALS_FILE, scopes=SCOPES
-            )
+            creds = _get_credentials()
             client = gspread.authorize(creds)
             spreadsheet = client.open_by_key(SHEETS_ID)
 
@@ -274,9 +308,7 @@ async def get_all_archive_records() -> list[dict]:
     loop = asyncio.get_event_loop()
     try:
         def _fetch():
-            creds = Credentials.from_service_account_file(
-                SHEETS_CREDENTIALS_FILE, scopes=SCOPES
-            )
+            creds = _get_credentials()
             client = gspread.authorize(creds)
             spreadsheet = client.open_by_key(SHEETS_ID)
             try:

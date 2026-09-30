@@ -16,8 +16,19 @@ from datetime import datetime
 from google import genai
 from config import GEMINI_API_KEY
 
-# Regex untuk deteksi Google Drive link
-GDRIVE_REGEX = re.compile(r"https?://drive\.google\.com/\S+")
+# Regex untuk deteksi Google Drive dan link dokumentasi (s.id, bit.ly, tinyurl, docs.google)
+ARCHIVE_LINK_REGEX = re.compile(
+    r"https?://(?:drive\.google\.com|s\.id|bit\.ly|tinyurl\.com|docs\.google\.com)/\S+",
+    re.IGNORECASE
+)
+GDRIVE_REGEX = ARCHIVE_LINK_REGEX  # Kompatibilitas mundur
+
+# Header umum yang sering muncul di pesan bulk dan perlu diabaikan sebagai judul
+GENERIC_HEADERS = {
+    "usable link", "usable links", "link gdrive",
+    "link google drive", "link dokumentasi", "daftar link", "kumpulan link",
+    "usable link:", "usable links:"
+}
 
 # Kamus konversi nama bulan Indonesia/Inggris ke angka
 MONTH_MAP = {
@@ -43,57 +54,95 @@ def _get_client() -> genai.Client:
     return genai.Client(api_key=key)
 
 
+def clean_url(url: str) -> str:
+    """Bersihkan karakter trailing aneh dari URL hasil ekstraksi."""
+    return url.rstrip(".,;)>]\n\r\t \"'")
+
+
+def find_archive_links(text: str) -> list[str]:
+    """Cari semua link dokumentasi/arsip dalam teks."""
+    matches = ARCHIVE_LINK_REGEX.findall(text)
+    return [clean_url(m) for m in matches]
+
+
 def _extract_gdrive_link(text: str) -> str:
-    """Ekstrak Google Drive URL secara presisi menggunakan regex."""
-    match = GDRIVE_REGEX.search(text)
+    """Ekstrak Google Drive / dokumentasi URL secara presisi menggunakan regex."""
+    match = ARCHIVE_LINK_REGEX.search(text)
     if match:
-        return match.group(0).rstrip(".,;)>]\n\r\t ")
+        return clean_url(match.group(0))
     return "NULL"
 
 
 def _extract_date_fallback(text: str, default_date: str) -> str:
-    """Ekstrak tanggal dari teks jika AI gagal (misal: 29 September 2026 atau 2026-09-29)."""
+    """Ekstrak tanggal dari teks secara pintar dan presisi."""
+    # Special: Natal YYYY
+    m_natal = re.search(r"\bnatal\s+(\d{4})\b", text, re.IGNORECASE)
+    if m_natal:
+        return f"{m_natal.group(1)}-12-25"
+
+    # Format DD/MM/YYYY atau DD-MM-YYYY
+    m_dmy = re.search(r"\b(\d{1,2})[-/](\d{1,2})[-/](\d{4})\b", text)
+    if m_dmy:
+        d, m, y = m_dmy.groups()
+        return f"{y}-{int(m):02d}-{int(d):02d}"
+
     # Format YYYY-MM-DD
     m_iso = re.search(r"\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b", text)
     if m_iso:
         y, m, d = m_iso.groups()
         return f"{y}-{int(m):02d}-{int(d):02d}"
 
-    # Format DD-MM-YYYY
-    m_dmy = re.search(r"\b(\d{1,2})[-/](\d{1,2})[-/](\d{4})\b", text)
-    if m_dmy:
-        d, m, y = m_dmy.groups()
-        return f"{y}-{int(m):02d}-{int(d):02d}"
-
-    # Format DD [Nama Bulan] YYYY (misal: 29 September 2026)
-    m_words = re.search(r"\b(\d{1,2})\s+([a-zA-Z]+)\s+(\d{4})\b", text)
-    if m_words:
-        d, m_name, y = m_words.groups()
+    # Format DD [Nama Bulan] YYYY (misal: 18 NOV 2025 atau 29 September 2026)
+    m_words_full = re.search(r"\b(\d{1,2})\s+([a-zA-Z]+)\s+(\d{4})\b", text)
+    if m_words_full:
+        d, m_name, y = m_words_full.groups()
         m_num = MONTH_MAP.get(m_name.lower())
         if m_num:
             return f"{y}-{m_num}-{int(d):02d}"
+
+    # Format DD [Nama Bulan] YY (misal: 7 NOV 25)
+    m_words_yy = re.search(r"\b(\d{1,2})\s+([a-zA-Z]+)\s+(\d{2})\b", text)
+    if m_words_yy:
+        d, m_name, yy = m_words_yy.groups()
+        m_num = MONTH_MAP.get(m_name.lower())
+        if m_num:
+            return f"20{yy}-{m_num}-{int(d):02d}"
+
+    # Format DD [Nama Bulan] tanpa tahun (misal: 3 OKT, 18 DES) -> gunakan tahun default
+    m_words_noyear = re.search(r"\b(\d{1,2})\s+([a-zA-Z]{3,})\b", text)
+    if m_words_noyear:
+        d, m_name = m_words_noyear.groups()
+        m_num = MONTH_MAP.get(m_name.lower())
+        if m_num:
+            def_y = default_date[:4] if len(default_date) >= 4 else datetime.now().strftime("%Y")
+            return f"{def_y}-{m_num}-{int(d):02d}"
+
+    # Format Tahun saja YYYY (misal: 2024 atau 2025)
+    m_year = re.search(r"\b(20\d{2})\b", text)
+    if m_year:
+        return f"{m_year.group(1)}-01-01"
 
     return default_date
 
 
 def _fallback_classification(raw_text: str, event_date: str) -> dict:
-    """Fallback cerdas untuk menentukan judul & kategori jika AI mengalami kendala."""
+    """Fallback cerdas untuk menentukan judul & kategori secara deterministik."""
     clean = re.sub(r"https?://\S+", "", raw_text)
-    clean = re.sub(r"LINK\s+GDRIVE", "", clean, flags=re.I).strip(" :-\n\r\t")
-    
+    clean = re.sub(r"LINK\s+GDRIVE", "", clean, flags=re.IGNORECASE).strip(" :-\n\r\t")
+
     first_line = clean.split("\n")[0].strip() if clean else "Dokumentasi Kegiatan"
-    title = first_line[:50].strip(" :-\t")
+    title = first_line[:60].strip(" :-\t")
     if not title:
         title = "Dokumentasi Kegiatan"
 
     lower = title.lower()
-    if any(k in lower for k in ["komcad", "lapangan", "apel", "latihan", "kunjungan", "studi banding", "outbound"]):
+    if any(k in lower for k in ["komcad", "lapangan", "apel", "latihan", "kunjungan", "studi banding", "outbound", "latsitarda", "drone"]):
         category = "Lapangan"
-    elif any(k in lower for k in ["rapat", "evaluasi", "pleno", "internal", "briefing"]):
+    elif any(k in lower for k in ["rapat", "evaluasi", "pleno", "internal", "briefing", "pengarahan rektor", "sertilat", "sertijab", "pengukuhan", "cadet"]):
         category = "Internal"
-    elif any(k in lower for k in ["pers", "press", "media", "publikasi"]):
+    elif any(k in lower for k in ["pers", "press", "media", "publikasi", "liputan"]):
         category = "Publikasi"
-    elif any(k in lower for k in ["seminar", "workshop", "lomba", "festival", "event"]):
+    elif any(k in lower for k in ["seminar", "workshop", "lomba", "festival", "event", "pelantikan", "hut tni", "reuni", "piala menpora", "orkes", "orkestra", "paduan suara", "svara", "genderang suling", "natal", "hindu"]):
         category = "Event Utama"
     else:
         category = "Lainnya"
@@ -103,12 +152,99 @@ def _fallback_classification(raw_text: str, event_date: str) -> dict:
     slug_title = re.sub(r"\s+", "_", slug_title.strip())[:30]
     folder_name = f"{event_date}_{slug_cat}_{slug_title}"
 
+    words = [w.lower() for w in re.findall(r"\b[a-zA-Z]{3,}\b", title)]
+    tag_candidates = [w for w in words if w not in {"dan", "atau", "link", "part", "foto", "video", "giat", "dokum", "untuk"}]
+    tags = list(dict.fromkeys([category.lower()] + tag_candidates[:3]))
+
     return {
         "standardized_title": title,
         "category": category,
-        "tags": ["dokumentasi", category.lower()],
+        "tags": tags,
         "folder_name_convention": folder_name,
     }
+
+
+def split_bulk_text(text: str, default_date: str) -> list[dict]:
+    """
+    Pecah teks bulk menjadi daftar item individual.
+    Setiap link mendapatkan judul hierarkis, tanggal, kategori, tags, dan format nama folder.
+    """
+    lines = [ln.strip() for ln in text.split("\n")]
+    items = []
+
+    current_main_heading = ""
+    current_sub_heading = ""
+    pending_links = []
+
+    def commit_pending_links(override_sub=""):
+        nonlocal pending_links, current_main_heading, current_sub_heading
+        if not pending_links:
+            return
+
+        sub_to_use = override_sub or current_sub_heading
+        if current_main_heading and sub_to_use:
+            clean_sub = re.sub(r"^[-*•\d\.\s]+", "", sub_to_use).strip()
+            base_title = f"{current_main_heading} - {clean_sub}" if clean_sub else current_main_heading
+        elif current_main_heading:
+            base_title = current_main_heading
+        elif sub_to_use:
+            base_title = re.sub(r"^[-*•\d\.\s]+", "", sub_to_use).strip()
+        else:
+            base_title = "Dokumentasi Kegiatan"
+
+        ev_date = _extract_date_fallback(base_title, default_date)
+        cls_info = _fallback_classification(base_title, ev_date)
+
+        for idx, lnk in enumerate(pending_links):
+            item_title = base_title
+            if len(pending_links) > 1:
+                item_title = f"{base_title} (Part {idx + 1})"
+
+            f_name = cls_info["folder_name_convention"]
+            if len(pending_links) > 1:
+                f_name += f"_Part{idx+1}"
+
+            items.append({
+                "title": item_title,
+                "event_date": ev_date,
+                "category": cls_info["category"],
+                "tags": cls_info["tags"],
+                "link": clean_url(lnk),
+                "folder_name": f_name,
+            })
+        pending_links = []
+
+    for line in lines:
+        if not line:
+            continue
+
+        urls = ARCHIVE_LINK_REGEX.findall(line)
+        if urls:
+            first_url_pos = line.find(urls[0])
+            prefix = line[:first_url_pos].strip(" :-#\t")
+            if prefix and prefix.lower() not in GENERIC_HEADERS:
+                commit_pending_links()
+                pending_links.extend(urls)
+                commit_pending_links(override_sub=prefix)
+            else:
+                pending_links.extend(urls)
+            continue
+
+        lower_line = line.lower().strip(" :-\t#*")
+        if lower_line in GENERIC_HEADERS:
+            continue
+
+        is_sub = bool(re.match(r"^[-*•\d\.]+\s*", line))
+        if is_sub:
+            commit_pending_links()
+            current_sub_heading = line
+        else:
+            commit_pending_links()
+            current_main_heading = line
+            current_sub_heading = ""
+
+    commit_pending_links()
+    return items
 
 
 def _parse_json(text: str) -> dict:
@@ -395,3 +531,109 @@ async def run_pipeline(
     print(f"[Pipeline] Node 3 done: status={node3.get('status')}")
 
     return node3
+
+
+async def run_bulk_pipeline(
+    raw_text: str,
+    sender_name: str,
+    timestamp: str,
+) -> dict:
+    """
+    Pipeline khusus untuk pengarsipan pesan massal (Bulk Archive).
+    Memproses banyak link secara individual, menghasilkan baris-baris Sheets,
+    dan membuat rangkuman balasan Telegram yang ringkas & rapi.
+    """
+    default_date = timestamp[:10] if timestamp else datetime.now().strftime("%Y-%m-%d")
+    items = split_bulk_text(raw_text, default_date)
+
+    if not items:
+        found_links = find_archive_links(raw_text)
+        for idx, lnk in enumerate(found_links):
+            items.append({
+                "title": f"Dokumentasi Kegiatan {idx + 1}",
+                "event_date": default_date,
+                "category": "Lainnya",
+                "tags": ["dokumentasi", "bulk"],
+                "link": lnk,
+                "folder_name": f"{default_date}_Lainnya_Dokumentasi_{idx+1}",
+            })
+
+    # Optional AI enhancement jika batch kecil (<= 8 item)
+    if 1 < len(items) <= 8:
+        try:
+            summary_list = [{"idx": i, "title": it["title"], "event_date": it["event_date"]} for i, it in enumerate(items)]
+            ai_prompt = f"""Anda adalah AI Classifier PDD/Humas.
+Berikut adalah daftar {len(items)} kegiatan dari pesan Telegram:
+{json.dumps(summary_list, ensure_ascii=False)}
+
+Kategorikan masing-masing ke salah satu: Event Utama, Internal, Publikasi, Lapangan, atau Lainnya.
+Formatkan standardized_title agar rapi & profesional (Title Case, maks 5 kata).
+
+Keluarkan HANYA JSON array:
+[
+  {{"idx": 0, "standardized_title": "...", "category": "...", "tags": ["tag1", "tag2"]}},
+  ...
+]"""
+            ai_res = await asyncio.wait_for(_generate(ai_prompt), timeout=8.0)
+            ai_parsed = json.loads(re.search(r"\[.*\]", ai_res, re.DOTALL).group(0))
+            for ai_item in ai_parsed:
+                idx = ai_item.get("idx")
+                if idx is not None and 0 <= idx < len(items):
+                    if ai_item.get("standardized_title"):
+                        items[idx]["title"] = ai_item["standardized_title"]
+                    if ai_item.get("category"):
+                        items[idx]["category"] = ai_item["category"]
+                    if ai_item.get("tags"):
+                        items[idx]["tags"] = ai_item["tags"]
+        except Exception as e:
+            print(f"[Bulk Pipeline] AI refinement skipped: {e}")
+
+    now = datetime.now()
+    batch_timestamp_slug = now.strftime("%Y%m%d-%H%M%S")
+    now_str = now.strftime("%Y-%m-%d %H:%M:%S")
+
+    database_rows = []
+    for idx, it in enumerate(items, 1):
+        archive_id = f"DOC-{batch_timestamp_slug}-{idx:03d}"
+        tags_str = ", ".join(it.get("tags", []))
+        database_rows.append({
+            "ID_Arsip": archive_id,
+            "Tanggal_Kegiatan": it.get("event_date", default_date),
+            "Nama_Kegiatan": it.get("title", f"Kegiatan {idx}"),
+            "Kategori": it.get("category", "Lainnya"),
+            "Tags": tags_str,
+            "Link_Google_Drive": it.get("link", ""),
+            "Pengirim": sender_name,
+            "Format_Nama_Folder": it.get("folder_name", ""),
+            "Waktu_Input": now_str,
+        })
+
+    total = len(database_rows)
+    lines = [
+        "📦 *PENGARSIPAN MASSAL (BULK) BERHASIL*\n",
+        f"📊 *Total Link Diproses:* `{total} item`",
+        f"👤 *Pengirim:* {sender_name}",
+        f"🆔 *Batch ID:* `{batch_timestamp_slug}`\n",
+        "📋 *Rangkuman Entitas yang Diarsip:*"
+    ]
+
+    preview_limit = 10
+    for i, row in enumerate(database_rows[:preview_limit], 1):
+        link_md = f"[Buka Link]({row['Link_Google_Drive']})" if row['Link_Google_Drive'] else "❌"
+        lines.append(
+            f"{i}. *[{row['Kategori']}]* `{row['Nama_Kegiatan']}`\n"
+            f"   📅 {row['Tanggal_Kegiatan']} | 🔗 {link_md}"
+        )
+
+    if total > preview_limit:
+        lines.append(f"\n_...dan {total - preview_limit} dokumentasi lainnya berhasil dicatat secara individual._")
+
+    lines.append("\n💾 _Semua item telah disimpan ke baris masing-masing di Google Sheets._")
+
+    return {
+        "status": "success",
+        "is_bulk": True,
+        "total_count": total,
+        "database_rows": database_rows,
+        "telegram_reply_message": "\n".join(lines),
+    }

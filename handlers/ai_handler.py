@@ -143,6 +143,11 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not clean_text:
         return
 
+    # Jika mengandung link dokumentasi/drive, biarkan archive handler yang memproses
+    from utils.pipeline import find_archive_links
+    if find_archive_links(clean_text):
+        return
+
     user = update.effective_user
     await context.bot.send_chat_action(
         chat_id=update.effective_chat.id,

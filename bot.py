@@ -118,10 +118,10 @@ def main() -> None:
     app.add_handler(CommandHandler("status_arsip", cmd_status_arsip))
     app.add_handler(CommandHandler("audit_channel", cmd_audit_channel))
 
-    # Auto-archive: deteksi GDrive link di grup (prioritas tinggi, sebelum AI handler)
+    # Auto-archive: deteksi link dokumentasi (prioritas tinggi, sebelum AI chat handler)
     app.add_handler(
         MessageHandler(
-            filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS,
+            filters.TEXT & ~filters.COMMAND,
             handle_auto_archive,
         ),
         group=1,
