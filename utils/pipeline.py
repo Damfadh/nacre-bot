@@ -13,6 +13,7 @@ import asyncio
 import os
 import re
 from datetime import datetime
+from typing import Optional
 from google import genai
 from config import GEMINI_API_KEY
 from utils.link_checker import (
