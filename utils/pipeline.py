@@ -15,6 +15,12 @@ import re
 from datetime import datetime
 from google import genai
 from config import GEMINI_API_KEY
+from utils.link_checker import (
+    check_single_url,
+    check_links_batch,
+    STATUS_ICONS,
+    STATUS_LABELS,
+)
 
 # Regex untuk deteksi Google Drive dan link dokumentasi (s.id, bit.ly, tinyurl, docs.google)
 ARCHIVE_LINK_REGEX = re.compile(
@@ -420,12 +426,22 @@ Keluarkan HANYA JSON murni tanpa format markdown codeblock:
 # NODE 3: AI FORMATTER & RESPONSE GENERATOR
 # ─────────────────────────────────────────────
 
-async def node3_formatter(node2_output: dict, archive_id: str) -> dict:
+async def node3_formatter(
+    node2_output: dict,
+    archive_id: str,
+    link_check: Optional[dict] = None,
+) -> dict:
     """
     Node 3: Format data siap simpan ke Sheets + buat pesan balasan Telegram.
+    Mencakup status hasil check kesehatan link (Work, Butuh Akses, Rusak).
     """
     link = node2_output.get("link_drive", "NULL")
     link_display = link if link and link != "NULL" else "NULL"
+
+    status_link = link_check.get("status", "VALID") if link_check else "VALID"
+    status_icon = link_check.get("icon", "🟢") if link_check else "🟢"
+    status_label = link_check.get("label", "Work (Siap Akses)") if link_check else "Work (Siap Akses)"
+    status_detail = link_check.get("detail", "Aktif & Siap Diakses") if link_check else "Aktif & Siap Diakses"
 
     prompt = f"""Anda adalah AI Output Formatter dan Telegram Bot Responder.
 Tugas Anda adalah merubah JSON dari Node 2 menjadi dua objek utama:
@@ -435,7 +451,10 @@ Tugas Anda adalah merubah JSON dari Node 2 menjadi dua objek utama:
 ATURAN BALASAN TELEGRAM:
 - Gunakan bahasa Indonesia yang ramah, rapi, dan profesional.
 - Gunakan emoji yang sesuai.
-- Jika link_drive bernilai "NULL", berikan pesan peringatan bahwa link Google Drive tidak ditemukan.
+- Status link saat ini: {status_icon} {status_label} ({status_detail}).
+- Jika status_link bernilai "RESTRICTED", ingatkan dengan jelas bahwa link membutuhkan akses/izin (private).
+- Jika status_link bernilai "BROKEN", ingatkan bahwa link rusak / tidak ditemukan.
+- Jika link_drive bernilai "NULL", berikan pesan peringatan bahwa link tidak ditemukan.
 - ID Arsip sistem: {archive_id}
 
 INPUT DATA:
@@ -452,7 +471,8 @@ Keluarkan HANYA JSON murni tanpa format markdown codeblock:
     "Tags": "Tag1, Tag2, Tag3",
     "Link_Google_Drive": "{link_display}",
     "Pengirim": "sender",
-    "Format_Nama_Folder": "folder_name_convention"
+    "Format_Nama_Folder": "folder_name_convention",
+    "Status_Link": "{status_link}"
   }},
   "telegram_reply_message": "pesan balasan lengkap dengan emoji"
 }}"""
@@ -461,9 +481,10 @@ Keluarkan HANYA JSON murni tanpa format markdown codeblock:
         result = await _generate(prompt)
         data = _parse_json(result)
 
-        # Proteksi konsistensi link di database_row
+        # Proteksi konsistensi link & status di database_row
         if data.get("database_row", {}).get("Link_Google_Drive") in (None, "", "NULL") and link != "NULL":
             data["database_row"]["Link_Google_Drive"] = link
+        data.setdefault("database_row", {})["Status_Link"] = status_link
 
         return data
     except Exception as e:
@@ -472,6 +493,10 @@ Keluarkan HANYA JSON murni tanpa format markdown codeblock:
         warning = ""
         if link == "NULL":
             warning = "\n\n⚠️ *PERHATIAN:* Link Google Drive tidak ditemukan dalam pesan!"
+        elif status_link == "RESTRICTED":
+            warning = "\n\n🔒 *PERHATIAN:* Link ini terdeteksi *membutuhkan akses lebih / private*. Pastikan perizinan Google Drive telah dibuka untuk publik jika diperlukan."
+        elif status_link == "BROKEN":
+            warning = "\n\n🔴 *PERINGATAN:* Link ini rusak atau file/folder tidak ditemukan (HTTP 404 / Dihapus)!"
 
         return {
             "status": "success",
@@ -484,6 +509,7 @@ Keluarkan HANYA JSON murni tanpa format markdown codeblock:
                 "Link_Google_Drive": link_display,
                 "Pengirim": node2_output.get("sender", ""),
                 "Format_Nama_Folder": node2_output.get("folder_name_convention", ""),
+                "Status_Link": status_link,
             },
             "telegram_reply_message": (
                 f"✅ *DOKUMENTASI BERHASIL DIARSIP*\n\n"
@@ -492,7 +518,7 @@ Keluarkan HANYA JSON murni tanpa format markdown codeblock:
                 f"📁 *Kategori:* {node2_output.get('category', '-')}\n"
                 f"📅 *Tanggal:* {node2_output.get('event_date', '-')}\n"
                 f"🏷️ *Tags:* #{' #'.join(node2_output.get('tags', []))}\n"
-                f"🔗 *Link Drive:* {link_display}\n"
+                f"🔗 *Link Drive:* {link_display} {status_icon} _{status_label}_\n"
                 f"👤 *Pengirim:* {node2_output.get('sender', '-')}\n\n"
                 f"💡 *Saran Nama Folder:*\n`{node2_output.get('folder_name_convention', '-')}`"
                 f"{warning}"
@@ -511,7 +537,7 @@ async def run_pipeline(
 ) -> dict:
     """
     Jalankan pipeline lengkap Node 1 → Node 2 → Node 3.
-    Returns: output Node 3 (database_row + telegram_reply_message)
+    Termasuk pengecekan kesehatan link secara otomatis.
     """
     now = datetime.now()
     archive_id = f"DOC-{now.strftime('%Y%m%d-%H%M%S')}"
@@ -522,12 +548,22 @@ async def run_pipeline(
     node1 = await node1_extractor(raw_text, sender_name, timestamp)
     print(f"[Pipeline] Node 1 done: link={node1.get('link_drive')}, date={node1.get('event_date')}")
 
+    # Cek kesehatan link
+    link_url = node1.get("link_drive")
+    link_check = None
+    if link_url and link_url != "NULL":
+        try:
+            link_check = await check_single_url(link_url, timeout_sec=8.0)
+            print(f"[Pipeline] Link check: {link_check.get('status')} - {link_check.get('detail')}")
+        except Exception as e:
+            print(f"[Pipeline] Link check error: {e}")
+
     # Node 2
     node2 = await node2_classifier(node1)
     print(f"[Pipeline] Node 2 done: category={node2.get('category')}, title={node2.get('standardized_title')}")
 
     # Node 3
-    node3 = await node3_formatter(node2, archive_id)
+    node3 = await node3_formatter(node2, archive_id, link_check=link_check)
     print(f"[Pipeline] Node 3 done: status={node3.get('status')}")
 
     return node3
@@ -540,8 +576,8 @@ async def run_bulk_pipeline(
 ) -> dict:
     """
     Pipeline khusus untuk pengarsipan pesan massal (Bulk Archive).
-    Memproses banyak link secara individual, menghasilkan baris-baris Sheets,
-    dan membuat rangkuman balasan Telegram yang ringkas & rapi.
+    Memproses banyak link secara individual, memvalidasi kesehatan link,
+    menghasilkan baris-baris Sheets, dan membuat rangkuman balasan Telegram yang ringkas & rapi.
     """
     default_date = timestamp[:10] if timestamp else datetime.now().strftime("%Y-%m-%d")
     items = split_bulk_text(raw_text, default_date)
@@ -557,6 +593,16 @@ async def run_bulk_pipeline(
                 "link": lnk,
                 "folder_name": f"{default_date}_Lainnya_Dokumentasi_{idx+1}",
             })
+
+    # Cek kesehatan semua link secara concurrent
+    all_urls = [it["link"] for it in items if it.get("link") and it["link"] != "NULL"]
+    url_to_check = {}
+    if all_urls:
+        try:
+            check_results = await check_links_batch(all_urls, max_concurrent=15, timeout_sec=8.0)
+            url_to_check = {r["url"]: r for r in check_results}
+        except Exception as e:
+            print(f"[Bulk Pipeline] Error checking links batch: {e}")
 
     # Optional AI enhancement jika batch kecil (<= 8 item)
     if 1 < len(items) <= 8:
@@ -596,6 +642,7 @@ Keluarkan HANYA JSON array:
     for idx, it in enumerate(items, 1):
         archive_id = f"DOC-{batch_timestamp_slug}-{idx:03d}"
         tags_str = ", ".join(it.get("tags", []))
+        chk = url_to_check.get(it["link"], {"status": "VALID", "icon": "🟢", "label": "Work", "detail": "Aktif"})
         database_rows.append({
             "ID_Arsip": archive_id,
             "Tanggal_Kegiatan": it.get("event_date", default_date),
@@ -606,29 +653,54 @@ Keluarkan HANYA JSON array:
             "Pengirim": sender_name,
             "Format_Nama_Folder": it.get("folder_name", ""),
             "Waktu_Input": now_str,
+            "Status_Link": chk.get("status", "VALID"),
         })
 
     total = len(database_rows)
+    valid_cnt = sum(1 for r in database_rows if r["Status_Link"] == "VALID")
+    restr_cnt = sum(1 for r in database_rows if r["Status_Link"] == "RESTRICTED")
+    broken_cnt = sum(1 for r in database_rows if r["Status_Link"] == "BROKEN")
+
     lines = [
         "📦 *PENGARSIPAN MASSAL (BULK) BERHASIL*\n",
         f"📊 *Total Link Diproses:* `{total} item`",
+        f"   • 🟢 *Work / Siap Akses:* `{valid_cnt}`",
+    ]
+    if restr_cnt > 0:
+        lines.append(f"   • 🔒 *Butuh Akses (Restricted):* `{restr_cnt}`")
+    if broken_cnt > 0:
+        lines.append(f"   • 🔴 *Rusak / 404:* `{broken_cnt}`")
+
+    lines.extend([
         f"👤 *Pengirim:* {sender_name}",
         f"🆔 *Batch ID:* `{batch_timestamp_slug}`\n",
         "📋 *Rangkuman Entitas yang Diarsip:*"
-    ]
+    ])
 
     preview_limit = 10
     for i, row in enumerate(database_rows[:preview_limit], 1):
+        status_icon = "🟢" if row["Status_Link"] == "VALID" else ("🔒" if row["Status_Link"] == "RESTRICTED" else "🔴")
+        note = ""
+        if row["Status_Link"] == "RESTRICTED":
+            note = " ⚠️ _(Butuh Akses)_"
+        elif row["Status_Link"] == "BROKEN":
+            note = " ❌ _(Link Rusak)_"
         link_md = f"[Buka Link]({row['Link_Google_Drive']})" if row['Link_Google_Drive'] else "❌"
         lines.append(
-            f"{i}. *[{row['Kategori']}]* `{row['Nama_Kegiatan']}`\n"
+            f"{i}. {status_icon} *[{row['Kategori']}]* `{row['Nama_Kegiatan']}`{note}\n"
             f"   📅 {row['Tanggal_Kegiatan']} | 🔗 {link_md}"
         )
 
     if total > preview_limit:
         lines.append(f"\n_...dan {total - preview_limit} dokumentasi lainnya berhasil dicatat secara individual._")
 
-    lines.append("\n💾 _Semua item telah disimpan ke baris masing-masing di Google Sheets._")
+    if restr_cnt > 0 or broken_cnt > 0:
+        lines.append(
+            f"\n⚠️ *Pemberitahuan Status Link:*\n"
+            f"Ditemukan {restr_cnt} link yang membutuhkan akses/private dan {broken_cnt} link rusak. Mohon periksa perizinan folder di Google Drive jika ada file penting yang perlu dibuka untuk umum."
+        )
+
+    lines.append("\n💾 _Semua item beserta status akses telah disimpan ke Google Sheets._")
 
     return {
         "status": "success",

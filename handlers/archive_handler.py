@@ -25,6 +25,7 @@ from utils.sheets import (
     search_archives,
     is_sheets_configured,
 )
+from utils.link_checker import check_links_batch, check_single_url
 
 # Regex untuk deteksi link Google Drive dan link dokumentasi lainnya
 GDRIVE_PATTERN = ARCHIVE_LINK_REGEX
@@ -278,3 +279,100 @@ async def cmd_status_arsip(update: Update, context: ContextTypes.DEFAULT_TYPE):
             status += "\n• Upload file `credentials.json` Service Account"
 
     await update.message.reply_text(status, parse_mode="Markdown")
+
+
+async def cmd_cek_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Command /cek_link [url / teks] — Cek status kesehatan link apakah Work, Butuh Akses, atau Rusak.
+    Bisa juga me-reply pesan apa saja yang mengandung link.
+    """
+    message = update.message
+    if not message:
+        return
+
+    # Ambil teks dari args atau reply
+    if context.args:
+        raw_text = " ".join(context.args)
+    elif message.reply_to_message and message.reply_to_message.text:
+        raw_text = message.reply_to_message.text
+    else:
+        await message.reply_text(
+            "🔍 *Cara Pakai /cek_link:*\n\n"
+            "1. Ketik: `/cek_link [url]`\n"
+            "2. Atau: *Reply* ke pesan yang mengandung satu atau banyak link, lalu ketik `/cek_link`\n\n"
+            "Bot akan memeriksa apakah link tersebut:\n"
+            "• 🟢 *Work* (Bisa diakses langsung)\n"
+            "• 🔒 *Butuh Akses* (Private / Perlu Request Access)\n"
+            "• 🔴 *Rusak* (404 / File Tidak Ditemukan)",
+            parse_mode="Markdown",
+        )
+        return
+
+    links = find_archive_links(raw_text)
+    if not links:
+        # Coba cari link generik jika bukan link drive/shortlink
+        links = [m.rstrip(".,;)>]\n\r\t \"'") for m in re.findall(r"https?://\S+", raw_text)]
+
+    if not links:
+        await message.reply_text("❌ Tidak ditemukan link yang valid dalam pesan tersebut.")
+        return
+
+    status_msg = await message.reply_text(
+        f"🔍 *Mengecek status {len(links)} link...* ⏳\n_Memverifikasi keterbukaan akses dan respons server..._",
+        parse_mode="Markdown",
+    )
+
+    results = await check_links_batch(links, max_concurrent=15, timeout_sec=8.0)
+
+    try:
+        await status_msg.delete()
+    except Exception:
+        pass
+
+    if len(results) == 1:
+        res = results[0]
+        reply = (
+            f"🔍 *HASIL PENGECEKAN LINK*\n\n"
+            f"🔗 *URL:* {res['url']}\n"
+            f"📊 *Status:* {res['icon']} *{res['label']}*\n"
+            f"📝 *Keterangan:* {res['detail']}\n"
+        )
+        if res.get("final_url") and res["final_url"] != res["url"]:
+            reply += f"🎯 *Target Asli:* `{res['final_url'][:60]}...`\n"
+
+        if res["status"] == "RESTRICTED":
+            reply += "\n⚠️ *Catatan:* Link ini memerlukan izin akses. Buka Google Drive > Bagikan > Ubah menjadi *'Siapa saja yang memiliki link'* jika ingin dapat diakses publik."
+        elif res["status"] == "BROKEN":
+            reply += "\n🔴 *Peringatan:* Link tidak dapat diakses atau file telah dihapus."
+        else:
+            reply += "\n✅ *Link normal dan siap diakses siapa saja.*"
+
+        await _safe_reply(message, reply)
+        return
+
+    # Multiple links
+    valid_cnt = sum(1 for r in results if r["status"] == "VALID")
+    restr_cnt = sum(1 for r in results if r["status"] == "RESTRICTED")
+    broken_cnt = sum(1 for r in results if r["status"] == "BROKEN")
+
+    lines = [
+        f"🔍 *HASIL PENGECEKAN {len(results)} LINK*\n",
+        f"📊 *Ringkasan Status:*",
+        f"• 🟢 *Work / Siap Akses:* `{valid_cnt}`",
+    ]
+    if restr_cnt > 0:
+        lines.append(f"• 🔒 *Butuh Akses (Restricted):* `{restr_cnt}`")
+    if broken_cnt > 0:
+        lines.append(f"• 🔴 *Rusak / 404:* `{broken_cnt}`")
+
+    lines.append("\n📋 *Detail Status Setiap Link:*")
+    for i, res in enumerate(results[:15], 1):
+        lines.append(f"{i}. {res['icon']} [Buka Link]({res['url']}) — *{res['label']}*")
+
+    if len(results) > 15:
+        lines.append(f"\n_...dan {len(results) - 15} link lainnya._")
+
+    if restr_cnt > 0:
+        lines.append(f"\n⚠️ Ditemukan *{restr_cnt} link* yang membutuhkan izin akses (restricted). Pastikan setting Google Drive sudah diatur agar orang lain bisa melihat.")
+
+    await _safe_reply(message, "\n".join(lines))

@@ -89,33 +89,17 @@ def node1_deduplicator(records: list[dict]) -> tuple[list[dict], list[dict]]:
 # ─────────────────────────────────────────────
 # NODE 2: HTTP LINK VALIDATOR
 # ─────────────────────────────────────────────
+from utils.link_checker import check_single_link
 
 async def _check_single_link(session: aiohttp.ClientSession, item: dict) -> dict:
-    """Cek status HTTP satu link Google Drive."""
+    """Cek status kesehatan satu link Google Drive (valid, restricted, atau broken)."""
     url = item["link_drive"]
-    try:
-        async with session.get(url, allow_redirects=True) as resp:
-            code = resp.status
-            if code == 200:
-                http_status = "VALID"
-                issue_type = None
-            elif code in (404, 410):
-                http_status = "BROKEN"
-                issue_type = f"HTTP_{code}_NOT_FOUND"
-            elif code in (403, 401):
-                http_status = "RESTRICTED"
-                issue_type = "ACCESS_DENIED"
-            else:
-                http_status = "BROKEN"
-                issue_type = f"HTTP_{code}"
-    except asyncio.TimeoutError:
-        http_status = "BROKEN"
-        issue_type = "TIMEOUT"
-    except Exception as e:
-        http_status = "BROKEN"
-        issue_type = f"ERROR: {str(e)[:50]}"
-
-    return {**item, "http_status": http_status, "issue_type": issue_type}
+    res = await check_single_link(session, url, timeout_sec=10.0)
+    return {
+        **item,
+        "http_status": res["status"],
+        "issue_type": res["detail"] if res["status"] != "VALID" else None,
+    }
 
 
 async def node2_link_validator(unique_items: list[dict]) -> tuple[list[dict], list[dict]]:

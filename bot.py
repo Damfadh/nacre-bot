@@ -32,6 +32,7 @@ from handlers.archive_handler import (
     cmd_arsip,
     cmd_cari_arsip,
     cmd_status_arsip,
+    cmd_cek_link,
     handle_auto_archive,
 )
 from handlers.audit_handler import cmd_audit_channel, scheduled_audit
@@ -55,6 +56,7 @@ async def post_init(application: Application) -> None:
         BotCommand("kategori", "Lihat semua kategori foto"),
         BotCommand("help", "Bantuan penggunaan bot"),
         BotCommand("arsip", "Arsipkan dokumentasi (kirim link GDrive)"),
+        BotCommand("cek_link", "Cek status link (work/butuh akses/rusak)"),
         BotCommand("cari_arsip", "Cari arsip dokumentasi"),
         BotCommand("status_arsip", "Cek status sistem arsip"),
         BotCommand("audit_channel", "Admin: Audit & sortir semua link channel"),
@@ -114,6 +116,8 @@ def main() -> None:
 
     # ─── Archive / Dokumentasi Handlers ───
     app.add_handler(CommandHandler("arsip", cmd_arsip))
+    app.add_handler(CommandHandler("cek_link", cmd_cek_link))
+    app.add_handler(CommandHandler("check_link", cmd_cek_link))
     app.add_handler(CommandHandler("cari_arsip", cmd_cari_arsip))
     app.add_handler(CommandHandler("status_arsip", cmd_status_arsip))
     app.add_handler(CommandHandler("audit_channel", cmd_audit_channel))

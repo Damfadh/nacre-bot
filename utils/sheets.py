@@ -31,6 +31,7 @@ HEADERS = [
     "Pengirim",
     "Format_Nama_Folder",
     "Waktu_Input",
+    "Status_Link",
 ]
 
 
@@ -104,6 +105,7 @@ async def append_archive_row(database_row: dict) -> bool:
                 database_row.get("Pengirim", ""),
                 database_row.get("Format_Nama_Folder", ""),
                 datetime.now().strftime("%Y-%m-%d %H:%M:%S"),  # Waktu_Input
+                database_row.get("Status_Link", "VALID"),
             ]
             sheet.append_row(row, value_input_option="USER_ENTERED")
             return True
@@ -140,6 +142,7 @@ async def append_archive_rows(database_rows: list[dict]) -> bool:
                     item.get("Pengirim", ""),
                     item.get("Format_Nama_Folder", ""),
                     item.get("Waktu_Input") or now_str,
+                    item.get("Status_Link", "VALID"),
                 ])
             sheet.append_rows(rows, value_input_option="USER_ENTERED")
             return True
