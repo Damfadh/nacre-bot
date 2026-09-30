@@ -93,20 +93,28 @@ async def cmd_arsip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif not is_sheets_configured():
         reply_text += "\n\n⚠️ _Google Sheets belum dikonfigurasi. Data tidak tersimpan ke Sheets._"
 
-    await message.reply_text(reply_text, parse_mode="Markdown")
+    await _safe_reply(message, reply_text)
+
+
+async def _safe_reply(message, text: str, **kwargs):
+    """Kirim balasan dengan fallback tanpa markdown jika formatting error."""
+    try:
+        await message.reply_text(text, parse_mode="Markdown", **kwargs)
+    except Exception:
+        await message.reply_text(text, **kwargs)
 
 
 async def handle_auto_archive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handler otomatis: proses pesan grup yang mengandung link Google Drive.
+    Handler otomatis: proses pesan grup/channel yang mengandung link Google Drive.
     Hanya aktif di grup, tidak di private chat.
     """
-    message = update.message
+    message = update.message or update.channel_post
     if not message or not message.text:
         return
 
     # Hanya di grup / supergroup / channel
-    chat_type = update.effective_chat.type
+    chat_type = update.effective_chat.type if update.effective_chat else ""
     if chat_type == "private":
         return
 
@@ -115,7 +123,13 @@ async def handle_auto_archive(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     user = update.effective_user
-    sender_name = user.full_name or user.username or f"User {user.id}"
+    if user:
+        sender_name = user.full_name or user.username or f"User {user.id}"
+    elif update.effective_chat:
+        sender_name = update.effective_chat.title or "Channel Post"
+    else:
+        sender_name = "Anonymous"
+
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     # Proses pipeline tanpa status message (silent di grup)
@@ -127,7 +141,7 @@ async def handle_auto_archive(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # Balas di grup
     reply_text = result.get("telegram_reply_message", "✅ Dokumentasi diarsip.")
-    await message.reply_text(reply_text, parse_mode="Markdown")
+    await _safe_reply(message, reply_text)
 
 
 async def cmd_cari_arsip(update: Update, context: ContextTypes.DEFAULT_TYPE):
