@@ -12,6 +12,7 @@ import json
 import asyncio
 import os
 import re
+import time
 from datetime import datetime
 from typing import Optional
 from google import genai
@@ -263,28 +264,54 @@ def _parse_json(text: str) -> dict:
     return json.loads(text)
 
 
+_AI_COOLDOWN_UNTIL = 0.0
+
+
 async def _generate(prompt: str) -> str:
-    """Jalankan Gemini Interactions API secara async dengan auto-retry."""
+    """
+    Jalankan Gemini Interactions API secara async dengan model fallback & circuit breaker.
+    Jika terjadi 429 (Rate Limit / Quota Exceeded), aktifkan cooldown agar request berikutnya
+    langsung beralih ke fallback deterministik tanpa menunggu/hanging.
+    """
+    global _AI_COOLDOWN_UNTIL
+
+    now = time.time()
+    if now < _AI_COOLDOWN_UNTIL:
+        remaining = int(_AI_COOLDOWN_UNTIL - now)
+        raise RuntimeError(f"AI Cooldown aktif (429 Rate Limit), tersisa {remaining}s. Memakai fallback.")
+
     loop = asyncio.get_event_loop()
     client = _get_client()
 
-    for attempt in range(3):
+    models_to_try = ["gemini-3.5-flash-lite", "gemini-3.5-flash"]
+    last_err = None
+
+    for model_name in models_to_try:
         try:
-            res = await loop.run_in_executor(
+            call = loop.run_in_executor(
                 None,
-                lambda: client.interactions.create(
-                    model="gemini-3.8-flash",
+                lambda m=model_name: client.interactions.create(
+                    model=m,
                     input=prompt,
                 ),
             )
+            res = await asyncio.wait_for(call, timeout=12.0)
             return res.output_text if hasattr(res, "output_text") else str(res)
+        except asyncio.TimeoutError:
+            print(f"[Pipeline AI] Timeout 12s on model {model_name}, mencoba model berikutnya...")
+            last_err = TimeoutError(f"Timeout on {model_name}")
+            continue
         except Exception as e:
             err = str(e)
-            print(f"[Pipeline AI] Attempt {attempt+1} error: {err[:150]}")
-            if ("503" in err or "UNAVAILABLE" in err or "high demand" in err.lower()) and attempt < 2:
-                await asyncio.sleep(2)
-                continue
-            raise e
+            print(f"[Pipeline AI] Model {model_name} error: {err[:150]}")
+            last_err = e
+            if "429" in err or "RESOURCE_EXHAUSTED" in err or "Rate limit" in err:
+                _AI_COOLDOWN_UNTIL = time.time() + 120.0
+                print(f"[Pipeline AI] 429 Terdeteksi! Circuit breaker cooldown diaktifkan 120s.")
+                break
+            continue
+
+    raise last_err or RuntimeError("Semua model AI gagal merespons.")
 
 
 # ─────────────────────────────────────────────

@@ -191,13 +191,14 @@ Keluarkan HANYA JSON murni tanpa format markdown codeblock.
   "telegram_report_message": "pesan laporan lengkap dengan emoji dan format Markdown"
 }}"""
 
-    res = await loop.run_in_executor(
+    call = loop.run_in_executor(
         None,
         lambda: client.interactions.create(
-            model="gemini-3.8-flash",
+            model="gemini-3.5-flash",
             input=prompt,
         )
     )
+    res = await asyncio.wait_for(call, timeout=15.0)
     raw = res.output_text if hasattr(res, "output_text") else str(res)
     text = raw.strip().replace("```json", "").replace("```", "").strip()
     return json.loads(text)

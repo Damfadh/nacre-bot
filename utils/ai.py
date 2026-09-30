@@ -1,6 +1,6 @@
 """
 Modul integrasi Google Gemini AI menggunakan SDK resmi terbaru: google-genai
-Menggunakan Interactions API (gemini-3.8-flash).
+Menggunakan Interactions API (gemini-3.5-flash).
 """
 import asyncio
 import base64
@@ -47,7 +47,7 @@ def clear_chat_session(user_id: int) -> None:
 
 async def chat_with_ai(user_id: int, message: str) -> str:
     """
-    Chat dengan Gemini 3.8 Flash menggunakan Interactions API.
+    Chat dengan Gemini 3.5 Flash menggunakan Interactions API.
     Mendukung percakapan multi-turn otomatis melalui previous_interaction_id.
     Dilengkapi auto-retry untuk mengatasi lonjakan antrean (503 transient error).
     """
@@ -58,50 +58,51 @@ async def chat_with_ai(user_id: int, message: str) -> str:
         return f"❌ Konfigurasi AI belum siap: {e}"
 
     prev_id = _user_interaction_ids.get(user_id)
+    models_to_try = ["gemini-3.5-flash-lite", "gemini-3.5-flash"]
 
-    for attempt in range(3):
-        try:
-            def _call_api():
-                kwargs = {
-                    "model": "gemini-3.8-flash",
-                    "system_instruction": SYSTEM_PROMPT,
-                    "input": message,
-                }
-                if prev_id:
-                    kwargs["previous_interaction_id"] = prev_id
-                return client.interactions.create(**kwargs)
+    for attempt in range(2):
+        for model_name in models_to_try:
+            try:
+                def _call_api(m=model_name):
+                    kwargs = {
+                        "model": m,
+                        "system_instruction": SYSTEM_PROMPT,
+                        "input": message,
+                    }
+                    if prev_id:
+                        kwargs["previous_interaction_id"] = prev_id
+                    return client.interactions.create(**kwargs)
 
-            res = await loop.run_in_executor(None, _call_api)
-            if res and hasattr(res, "id"):
-                _user_interaction_ids[user_id] = res.id
-            if hasattr(res, "output_text") and res.output_text:
-                return res.output_text
-            return str(res)
+                call = loop.run_in_executor(None, _call_api)
+                res = await asyncio.wait_for(call, timeout=15.0)
+                if res and hasattr(res, "id"):
+                    _user_interaction_ids[user_id] = res.id
+                if hasattr(res, "output_text") and res.output_text:
+                    return res.output_text
+                return str(res)
 
-        except Exception as e:
-            err_msg = str(e)
-            print(f"[AI Chat] Attempt {attempt+1} error: {err_msg}")
-
-            # Jika previous_interaction_id invalid/expired, reset session dan coba ulang
-            if prev_id and ("not found" in err_msg.lower() or "invalid" in err_msg.lower() or "404" in err_msg):
-                prev_id = None
-                _user_interaction_ids.pop(user_id, None)
+            except asyncio.TimeoutError:
+                print(f"[AI Chat] Model {model_name} timeout 15s")
                 continue
+            except Exception as e:
+                err_msg = str(e)
+                print(f"[AI Chat] Attempt {attempt+1} Model {model_name} error: {err_msg[:120]}")
 
-            # Jika 503 / temporary unavailable, coba ulang hingga 3x
-            if "503" in err_msg or "UNAVAILABLE" in err_msg or "high demand" in err_msg.lower():
-                if attempt < 2:
+                # Jika previous_interaction_id invalid/expired, reset session dan coba ulang
+                if prev_id and ("not found" in err_msg.lower() or "invalid" in err_msg.lower() or "404" in err_msg):
+                    prev_id = None
+                    _user_interaction_ids.pop(user_id, None)
+                    break
+
+                if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "Rate limit" in err_msg:
+                    # Coba model lite berikutnya jika masih di loop models_to_try
+                    continue
+
+                if "503" in err_msg or "UNAVAILABLE" in err_msg or "high demand" in err_msg.lower():
                     await asyncio.sleep(2)
                     continue
-                return "⚠️ Server AI Google sedang mengalami lonjakan antrean (503). Silakan coba lagi dalam beberapa detik ya!"
 
-            # Jika 429 quota
-            if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
-                return "⚠️ Kuota penggunaan AI gratis sedang penuh. Silakan coba beberapa saat lagi."
-
-            return f"❌ Terjadi kendala pada layanan AI: {err_msg[:120]}"
-
-    return "⚠️ Server AI sedang sibuk. Silakan coba lagi."
+    return "⚠️ Layanan AI sedang sibuk atau kuota tercapai. Silakan coba sesaat lagi ya!"
 
 
 
@@ -133,13 +134,14 @@ Contoh output: 1,3,7"""
     loop = asyncio.get_event_loop()
     try:
         client = get_client()
-        res = await loop.run_in_executor(
+        call = loop.run_in_executor(
             None,
             lambda: client.interactions.create(
-                model="gemini-3.8-flash",
+                model="gemini-3.5-flash",
                 input=prompt,
             )
         )
+        res = await asyncio.wait_for(call, timeout=12.0)
         result = res.output_text.strip() if hasattr(res, "output_text") else ""
 
         if result == "NONE" or not result:
